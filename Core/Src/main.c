@@ -71,6 +71,8 @@ ETH_HandleTypeDef heth;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
+extern  uint8_t  *assembled_buf;
+extern  uint16_t  assembled_len;
 
 /* USER CODE END PV */
 
@@ -133,9 +135,10 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  printf("entrting while\r\n");
   while (1)
   {
-	  HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_0);
+	  HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_7);
 	  HAL_Delay(1000);
     /* USER CODE END WHILE */
 
@@ -302,10 +305,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOG_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_14|GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_7, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PB0 PB14 PB7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_14|GPIO_PIN_7;
+  /*Configure GPIO pins : PB14 PB7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_7;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -320,22 +323,48 @@ static void MX_GPIO_Init(void)
 
 
 
+
+/* -----------------------------------------------------------------------
+ * HAL_ETH_RxCpltCallback
+ * Called after a complete frame is received and descriptors processed.
+ * By the time this fires, RxLinkCallback has already run and cache
+ * is already invalidated — safe to read assembled_buf directly.
+ * ----------------------------------------------------------------------- */
 void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *heth)
 {
-    printf("got the callback\r\n");
+    void *p = NULL;
 
-    void *rx_buf;
+    /* Reset assembled frame state before ReadData populates it
+       via RxLinkCallback */
+    assembled_buf = NULL;
+    assembled_len = 0;
 
-    if( HAL_ETH_ReadData(heth, &rx_buf) == HAL_OK )
-    {
-        /* HAL_ETH_ReadData populates app_rx_buffer with the frame data */
-        uint8_t *buf = (uint8_t*)rx_buf;
-        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, 1);
-    }
+    if( HAL_ETH_ReadData(heth, &p) != HAL_OK )
+        return;
+
+    /* assembled_buf and assembled_len are now populated by RxLinkCallback */
+    if( assembled_buf == NULL || assembled_len < 14 )
+        return;
+
+    uint8_t  *buf = assembled_buf;
+    uint32_t  len = assembled_len;
+
+    /* Debug — print raw frame */
+    printf("len=%lu EtherType=0x%02X%02X\r\n",
+           len, buf[12], buf[13]);
+    printf("Dst: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+           buf[0],buf[1],buf[2],buf[3],buf[4],buf[5]);
+    printf("Src: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+           buf[6],buf[7],buf[8],buf[9],buf[10],buf[11]);
+
+    uint16_t ethertype = (buf[12] << 8) | buf[13];
+
+    /* Filter — add your trigger logic here */
+    if( ethertype == 0x0806 )
+        printf("ARP received!\r\n");
+    else if( ethertype == 0x0800 )
+        printf("IPv4 received!\r\n");
 }
-
-
-
 
 
 /**************************************************************************************************************/
