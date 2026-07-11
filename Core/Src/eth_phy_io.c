@@ -10,9 +10,30 @@
 #include "main.h"   /* for heth, HAL_GetTick */
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
+#include "ota.h"
 
 #define ETH_RX_BUFFER_SIZE   1524
 #define ETH_RX_BUFFER_CNT    4      /* match or exceed ETH_RX_DESC_CNT */
+
+/* ─────────────────────────────────────────────────────────────
+ * MODIFY THESE — must match Python script constants exactly. TOTAL MUST EQUAL 42 BYTES(PASS + FILLER)
+ * ───────────────────────────────────────────────────────────── */
+#define OTA_ETHERTYPE       0xBABE
+#define OTA_PASSWORD        "WASSUP_SEXY"
+#define OTA_PASSWORD_LEN    11
+#define OTA_FILLER          "STM32F767_OTA_AURA_CRISTIANO_07"
+#define OTA_FILLER_LEN      31
+
+/* ─────────────────────────────────────────────────────────────
+ * DO NOT MODIFY — derived automatically from above
+ * ───────────────────────────────────────────────────────────── */
+#define OTA_PAYLOAD_LEN         (OTA_PASSWORD_LEN + OTA_FILLER_LEN + 4)    /* 46 */
+#define OTA_FRAME_MIN_LEN       (14 + OTA_PAYLOAD_LEN)                     /* 60 */
+#define OTA_FILLER_OFFSET       (14 + OTA_PASSWORD_LEN)                    /* 20 */
+#define OTA_CRC_OFFSET          (14 + OTA_PASSWORD_LEN + OTA_FILLER_LEN)   /* 56 */
+#define OTA_CRC_INPUT_LEN       (2  + OTA_PASSWORD_LEN + OTA_FILLER_LEN)   /* 44 */
+#define OTA_CRC_INPUT_PADDED    ((OTA_CRC_INPUT_LEN + 3) & ~3)             /* 48 */
 
 typedef struct
 {
@@ -20,6 +41,7 @@ typedef struct
 } RxBuff_t;
 
 extern ETH_HandleTypeDef heth;
+extern CRC_HandleTypeDef hcrc;
 static RxBuff_t rx_pool[ETH_RX_BUFFER_CNT] __attribute__((aligned(32)));
 static uint8_t  rx_pool_idx = 0;
 
@@ -114,3 +136,154 @@ void HAL_ETH_RxLinkCallback(void **pStart, void **pEnd,
     }
     *pEnd = buff;
 }
+
+
+/* -----------------------------------------------------------------------
+ * HAL_ETH_RxCpltCallback
+ * Called after a complete frame is received and descriptors processed.
+ * By the time this fires, RxLinkCallback has already run and cache
+ * is already invalidated — safe to read assembled_buf directly.
+ * ----------------------------------------------------------------------- */
+void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *heth)
+{
+    void *p = NULL;
+
+    /* Reset assembled frame state before ReadData populates it
+       via RxLinkCallback */
+    assembled_buf = NULL;
+    assembled_len = 0;
+
+    if( HAL_ETH_ReadData(heth, &p) != HAL_OK )
+        return;
+
+    /* assembled_buf and assembled_len are now populated by RxLinkCallback */
+    if( assembled_buf == NULL || assembled_len < 14 )
+        return;
+
+    uint8_t  *buf = assembled_buf;
+    uint32_t  len = assembled_len;
+
+    uint16_t ethertype = (buf[12] << 8) | buf[13];
+
+    /* Place this check inside HAL_ETH_RxLinkCallback after cache invalidation */
+
+    if( ethertype == OTA_ETHERTYPE && len >= OTA_FRAME_MIN_LEN )
+    {
+        /* Step 1 — check password */
+        if( memcmp(&buf[14], OTA_PASSWORD, OTA_PASSWORD_LEN) != 0 )
+            return;
+
+        /* Step 2 — check filler */
+        if( memcmp(&buf[OTA_FILLER_OFFSET], OTA_FILLER, OTA_FILLER_LEN) != 0 )
+            return;
+
+        /* Step 3 — extract received CRC from buf[56..59] big-endian */
+        uint32_t received_crc = ((uint32_t)buf[OTA_CRC_OFFSET    ] << 24) |
+                                 ((uint32_t)buf[OTA_CRC_OFFSET + 1] << 16) |
+                                 ((uint32_t)buf[OTA_CRC_OFFSET + 2] <<  8) |
+                                  (uint32_t)buf[OTA_CRC_OFFSET + 3];
+
+        /* Step 4 — build CRC input: EtherType(2) + PASSWORD(6) + FILLER(36) = 44 bytes
+           padded to 48 bytes (next multiple of 4) to satisfy HAL_CRC_Calculate */
+        uint8_t crc_input[OTA_CRC_INPUT_PADDED] = {0};
+        memcpy(&crc_input[0], &buf[12], (unsigned int)OTA_CRC_INPUT_LEN);
+
+        uint32_t computed_crc = HAL_CRC_Calculate( &hcrc,
+                                                    (uint32_t*)crc_input,
+                                                    OTA_CRC_INPUT_PADDED );
+
+        /* Step 5 — compare */
+        if( received_crc != computed_crc )
+        {
+            printf("OTA: CRC mismatch — rejected\r\n");
+            return;
+        }
+
+        printf("OTA: trigger authenticated\r\n");
+        ota_requested_flag = true;
+    }
+
+}
+
+/* -----------------------------------------------------------------------
+ * Public: write_cfg_to_flash
+ *
+ * Erases config sector (sector 4) and writes the ETX_GNRL_CFG_ struct.
+ * Non-static so it can be called from http_ota.c if needed.
+ * ----------------------------------------------------------------------- */
+HAL_StatusTypeDef write_cfg_to_flash( ETX_GNRL_CFG_ *cfg )
+{
+    HAL_StatusTypeDef ret;
+
+    do
+    {
+        if( cfg == NULL )
+        {
+            ret = HAL_ERROR;
+            break;
+        }
+
+        ret = HAL_FLASH_Unlock();
+        if( ret != HAL_OK )
+            break;
+
+        FLASH_WaitForLastOperation( HAL_MAX_DELAY );
+
+        FLASH_EraseInitTypeDef EraseInitStruct;
+        uint32_t SectorError;
+
+        EraseInitStruct.TypeErase    = FLASH_TYPEERASE_SECTORS;
+        EraseInitStruct.Sector       = FLASH_SECTOR_4;
+        EraseInitStruct.NbSectors    = 1u;
+        EraseInitStruct.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+
+        __HAL_FLASH_CLEAR_FLAG( FLASH_FLAG_EOP    | FLASH_FLAG_OPERR  |
+                                 FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR |
+                                 FLASH_FLAG_PGPERR );
+
+        ret = HAL_FLASHEx_Erase( &EraseInitStruct, &SectorError );
+        if( ret != HAL_OK )
+            break;
+
+        uint8_t *data = (uint8_t*)cfg;
+        for( uint32_t i = 0u; i < sizeof(ETX_GNRL_CFG_); i++ )
+        {
+            ret = HAL_FLASH_Program( FLASH_TYPEPROGRAM_BYTE,
+                                     ETX_CONFIG_FLASH_ADDR + i,
+                                     data[i] );
+            if( ret != HAL_OK )
+            {
+                printf("OTA: config flash write error at byte %lu\r\n", i);
+                break;
+            }
+        }
+
+        FLASH_WaitForLastOperation( HAL_MAX_DELAY );
+
+        if( ret != HAL_OK )
+            break;
+
+        ret = HAL_FLASH_Lock();
+
+    } while( false );
+
+    return ret;
+}
+
+
+void OTA_RESET(void){
+
+    ETX_GNRL_CFG_ cfg;
+    memcpy( &cfg, (ETX_GNRL_CFG_*)(ETX_CONFIG_FLASH_ADDR), sizeof(ETX_GNRL_CFG_) );
+    cfg.reboot_cause = ETX_OTA_REQUEST;
+    if( write_cfg_to_flash( &cfg ) != HAL_OK )
+    {
+        printf("OTA: failed to update reboot cause.\r\n");
+        return;
+    }
+    printf("Rebooting...\r\n");
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+    HAL_Delay(1000);
+    HAL_NVIC_SystemReset();
+}
+

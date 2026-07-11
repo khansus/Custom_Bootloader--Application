@@ -37,6 +37,9 @@
 /* -----------------------------------------------------------------------
  * Return codes
  * ----------------------------------------------------------------------- */
+
+extern volatile bool ota_requested_flag;
+
 typedef enum
 {
     ETX_OTA_EX_OK  = 0,
@@ -70,29 +73,8 @@ typedef struct
 /* -----------------------------------------------------------------------
  * Public API
  * ----------------------------------------------------------------------- */
-
-/**
- * @brief  Flash firmware from a RAM buffer into the next available slot.
- *         Called by httpd_post_finished() after the full binary is received.
- * @param  buf   Pointer to the raw firmware bytes in RAM
- * @param  size  Number of bytes in buf
- * @retval ETX_OTA_EX_OK on success, ETX_OTA_EX_ERR on any failure
- */
-ETX_OTA_EX_ etx_ota_flash_from_buffer( uint8_t *buf, uint32_t size, uint32_t verified_crc );
-
-/**
- * @brief  Copy the firmware from the active slot into the application
- *         flash region (ETX_APP_FLASH_ADDR) and verify its CRC.
- *         Called by the bootloader main() before jumping to the app.
- */
-void load_new_app( void );
-
-/**
- * @brief  Select the slot to write into.
- *         Prefers invalid slots, then inactive slots.
- * @retval Slot index (0 or 1), or 0xFF if none available
- */
-uint8_t get_available_slot_number( void );
+void OTA_RESET(void);
+void eth_phy_init(void);
 
 /**
  * @brief  Erase config sector and write cfg struct to ETX_CONFIG_FLASH_ADDR.
