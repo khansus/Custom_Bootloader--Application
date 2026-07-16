@@ -1,0 +1,14 @@
+../Drivers/CMSIS/Include/core_cm7.h:2464:22:SCB_InvalidateDCache_by_Addr	2
+../Drivers/CMSIS/Include/core_cm7.h:2491:22:SCB_CleanDCache_by_Addr	2
+../Support/eth_support.c:44:16:ETH_PHY_IO_Init	1
+../Support/eth_support.c:45:16:ETH_PHY_IO_DeInit	1
+../Support/eth_support.c:46:16:ETH_PHY_IO_GetTick	1
+../Support/eth_support.c:48:16:ETH_PHY_IO_WriteReg	2
+../Support/eth_support.c:55:16:ETH_PHY_IO_ReadReg	2
+../Support/eth_support.c:70:6:LAN8742_init	2
+../Support/eth_support.c:89:6:HAL_ETH_RxAllocateCallback	1
+../Support/eth_support.c:103:6:HAL_ETH_RxLinkCallback	2
+../Support/eth_support.c:135:6:HAL_ETH_RxCpltCallback	8
+../Support/eth_support.c:183:19:write_cfg_to_flash	7
+../Support/eth_support.c:243:19:eth_transmit_raw	1
+../Support/eth_support.c:265:13:ota_build_frame	3

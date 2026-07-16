@@ -1,0 +1,9 @@
+../Support/hash_file.c:24:6:HASH_compute_verify	24	static
+../Support/hash_file.c:63:6:HASH_print	24	static
+../Support/hash_file.c:69:6:OTA_RESET	72	static
+../Support/hash_file.c:128:6:sha256_Init	16	static
+../Support/hash_file.c:144:6:sha256_Transform	320	static
+../Support/hash_file.c:198:6:sha256_Update	56	static
+../Support/hash_file.c:233:6:sha256_Final	120	static
+../Support/hash_file.c:264:6:hmac_to_hex_string	24	static
+../Support/hash_file.c:275:6:hmac_sha256	312	static

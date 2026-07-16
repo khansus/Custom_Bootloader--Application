@@ -1,47 +1,29 @@
 /*
- * eth_phy_io.c
+ * eth_support.c
  *
  *  Created on: Jun 30, 2026
- *      Author: Hp
+ *      Author: Sajjad
  */
 
 
+#include "ota_support.h"
 #include "lan8742.h"
 #include "main.h"   /* for heth, HAL_GetTick */
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
-#include "ota.h"
 
 #define ETH_RX_BUFFER_SIZE   1524
 #define ETH_RX_BUFFER_CNT    4      /* match or exceed ETH_RX_DESC_CNT */
 
-/* ─────────────────────────────────────────────────────────────
- * MODIFY THESE — must match Python script constants exactly. TOTAL MUST EQUAL 42 BYTES(PASS + FILLER)
- * ───────────────────────────────────────────────────────────── */
-#define OTA_ETHERTYPE       0xBABE
-#define OTA_PASSWORD        "WASSUP_SEXY"
-#define OTA_PASSWORD_LEN    11
-#define OTA_FILLER          "STM32F767_OTA_AURA_CRISTIANO_07"
-#define OTA_FILLER_LEN      31
 
-/* ─────────────────────────────────────────────────────────────
- * DO NOT MODIFY — derived automatically from above
- * ───────────────────────────────────────────────────────────── */
-#define OTA_PAYLOAD_LEN         (OTA_PASSWORD_LEN + OTA_FILLER_LEN + 4)    /* 46 */
-#define OTA_FRAME_MIN_LEN       (14 + OTA_PAYLOAD_LEN)                     /* 60 */
-#define OTA_FILLER_OFFSET       (14 + OTA_PASSWORD_LEN)                    /* 20 */
-#define OTA_CRC_OFFSET          (14 + OTA_PASSWORD_LEN + OTA_FILLER_LEN)   /* 56 */
-#define OTA_CRC_INPUT_LEN       (2  + OTA_PASSWORD_LEN + OTA_FILLER_LEN)   /* 44 */
-#define OTA_CRC_INPUT_PADDED    ((OTA_CRC_INPUT_LEN + 3) & ~3)             /* 48 */
 
 typedef struct
 {
     uint8_t  buff[ETH_RX_BUFFER_SIZE];
 } RxBuff_t;
 
-extern ETH_HandleTypeDef heth;
-extern CRC_HandleTypeDef hcrc;
+
 static RxBuff_t rx_pool[ETH_RX_BUFFER_CNT] __attribute__((aligned(32)));
 static uint8_t  rx_pool_idx = 0;
 
@@ -49,7 +31,13 @@ static uint8_t  rx_pool_idx = 0;
 uint8_t  *assembled_buf   = NULL;
 uint16_t  assembled_len   = 0;
 
-volatile bool ota_requested_flag = false;
+
+uint8_t recieved_hash[32] = {0};
+
+uint8_t tx_frame[60] ={0};
+
+static void ota_build_frame(void);
+
 
 lan8742_Object_t LAN8742;
 
@@ -79,13 +67,13 @@ lan8742_IOCtx_t LAN8742_IOCtx = {
     ETH_PHY_IO_GetTick
 };
 
-void eth_phy_init(void)
+void LAN8742_init(void)
 {
     LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
 
     if( LAN8742_Init(&LAN8742) != LAN8742_STATUS_OK )
     {
-        printf("LAN8742 PHY init FAILED\r\n");
+       // printf("LAN8742 PHY init FAILED\r\n");
     }
     else
     {
@@ -160,48 +148,29 @@ void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *heth)
     if( assembled_buf == NULL || assembled_len < 14 )
         return;
 
+    if(ota_intr_block)
+    	return;
+
     uint8_t  *buf = assembled_buf;
     uint32_t  len = assembled_len;
 
     uint16_t ethertype = (buf[12] << 8) | buf[13];
 
-    /* Place this check inside HAL_ETH_RxLinkCallback after cache invalidation */
 
-    if( ethertype == OTA_ETHERTYPE && len >= OTA_FRAME_MIN_LEN )
-    {
-        /* Step 1 — check password */
-        if( memcmp(&buf[14], OTA_PASSWORD, OTA_PASSWORD_LEN) != 0 )
-            return;
 
-        /* Step 2 — check filler */
-        if( memcmp(&buf[OTA_FILLER_OFFSET], OTA_FILLER, OTA_FILLER_LEN) != 0 )
-            return;
+    if( ethertype == OTA_ETHERTYPE && len >= 14 ){
 
-        /* Step 3 — extract received CRC from buf[56..59] big-endian */
-        uint32_t received_crc = ((uint32_t)buf[OTA_CRC_OFFSET    ] << 24) |
-                                 ((uint32_t)buf[OTA_CRC_OFFSET + 1] << 16) |
-                                 ((uint32_t)buf[OTA_CRC_OFFSET + 2] <<  8) |
-                                  (uint32_t)buf[OTA_CRC_OFFSET + 3];
+    	ota_build_frame();
+    	ota_requested_flag = true;
 
-        /* Step 4 — build CRC input: EtherType(2) + PASSWORD(6) + FILLER(36) = 44 bytes
-           padded to 48 bytes (next multiple of 4) to satisfy HAL_CRC_Calculate */
-        uint8_t crc_input[OTA_CRC_INPUT_PADDED] = {0};
-        memcpy(&crc_input[0], &buf[12], (unsigned int)OTA_CRC_INPUT_LEN);
 
-        uint32_t computed_crc = HAL_CRC_Calculate( &hcrc,
-                                                    (uint32_t*)crc_input,
-                                                    OTA_CRC_INPUT_PADDED );
+    	if(ota_window_started){
+    		memcpy(&recieved_hash,&buf[14],32);
+    		ota_process_response = true;
+    		//HASH_print(recieved_hash,"Recieved HASH");
+    	}
 
-        /* Step 5 — compare */
-        if( received_crc != computed_crc )
-        {
-            printf("OTA: CRC mismatch — rejected\r\n");
-            return;
-        }
-
-        printf("OTA: trigger authenticated\r\n");
-        ota_requested_flag = true;
-    }
+      }
 
 }
 
@@ -271,19 +240,36 @@ HAL_StatusTypeDef write_cfg_to_flash( ETX_GNRL_CFG_ *cfg )
 }
 
 
-void OTA_RESET(void){
+HAL_StatusTypeDef eth_transmit_raw(uint8_t *data, uint16_t len)
+{
 
-    ETX_GNRL_CFG_ cfg;
-    memcpy( &cfg, (ETX_GNRL_CFG_*)(ETX_CONFIG_FLASH_ADDR), sizeof(ETX_GNRL_CFG_) );
-    cfg.reboot_cause = ETX_OTA_REQUEST;
-    if( write_cfg_to_flash( &cfg ) != HAL_OK )
-    {
-        printf("OTA: failed to update reboot cause.\r\n");
-        return;
-    }
-    printf("Rebooting...\r\n");
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
-    HAL_Delay(1000);
-    HAL_NVIC_SystemReset();
+    /* TX buffer descriptor */
+    ETH_BufferTypeDef tx_buf;
+    tx_buf.buffer = data;
+    tx_buf.len    = len;
+    tx_buf.next   = NULL;   /* single buffer, no chaining */
+
+    /* Configure TX packet */
+    memset(&TxConfig, 0, sizeof(ETH_TxPacketConfig));
+    TxConfig.Attributes   = ETH_TX_PACKETS_FEATURES_CRCPAD;
+    TxConfig.Length       = len;
+    TxConfig.TxBuffer     = &tx_buf;
+    TxConfig.CRCPadCtrl   = ETH_CRC_PAD_INSERT;  /* let hardware add CRC and padding */
+
+    /* Flush DCache for TX buffer before DMA reads it */
+    SCB_CleanDCache_by_Addr((uint32_t*)data, (len + 31) & ~31);
+
+    return HAL_ETH_Transmit(&heth, &TxConfig, HAL_MAX_DELAY);
 }
+
+static void ota_build_frame(void){
+
+	for(int i = 0;i<60;i++)tx_frame[i] = 0x00;
+	for(int i = 0;i<6;i++)tx_frame[i] = 0xff;
+
+	tx_frame[7] = 0x80;tx_frame[8] = 0xE1;
+
+	tx_frame[12] = 0xBA;tx_frame[13] = 0xBE;
+}
+
 

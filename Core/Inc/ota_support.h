@@ -1,30 +1,24 @@
 /*
- * etx_ota_update.h
+ * ota_support.h
  *
- * Modified for HTTP OTA via lwIP httpd.
- * USART2 (OTA receive) and SD card peripherals are NOT enabled.
+ * Minimal support file created to verify and trigger OTA request.
  * Firmware is received as raw binary over HTTP POST from a browser.
  */
 
-#ifndef INC_OTA_H_
-#define INC_OTA_H_
+#ifndef INC_OTA_SUPPORT_H_
+#define INC_OTA_SUPPORT_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "main.h"
 
 /* -----------------------------------------------------------------------
  * Flash address map  (STM32F767ZI — do not change without updating linker)
  * ----------------------------------------------------------------------- */
 #define ETX_APP_FLASH_ADDR        0x08040000U   /* Application run address   */
-#define ETX_APP_SLOT0_FLASH_ADDR  0x080C0000U   /* OTA slot 0                */
-#define ETX_APP_SLOT1_FLASH_ADDR  0x08140000U   /* OTA slot 1                */
 #define ETX_CONFIG_FLASH_ADDR     0x08020000U   /* Bootloader config sector  */
 
 #define ETX_NO_OF_SLOTS           2U
-#define ETX_SLOT_MAX_SIZE        (512U * 1024U) /* 512 KB per slot           */
-
-/* Chunk size used when looping writes — matches original SD card path */
-#define ETX_OTA_DATA_MAX_SIZE    1024U
 
 /* -----------------------------------------------------------------------
  * Reboot reason codes (stored in config flash)
@@ -34,19 +28,22 @@
 #define ETX_OTA_REQUEST      0xDEADBEEFU
 #define ETX_LOAD_PREV_APP    0xFACEFADEU
 
-/* -----------------------------------------------------------------------
- * Return codes
- * ----------------------------------------------------------------------- */
+#define OTA_ETHERTYPE       0xBABE
 
+
+extern volatile bool ota_window_started;
+extern volatile bool ota_intr_block;
+extern volatile bool ota_process_response ;
 extern volatile bool ota_requested_flag;
 
-typedef enum
-{
-    ETX_OTA_EX_OK  = 0,
-    ETX_OTA_EX_ERR = 1,
-} ETX_OTA_EX_;
+extern ETH_HandleTypeDef heth;
+extern RNG_HandleTypeDef hrng;
+extern CRC_HandleTypeDef hcrc;
+extern ETH_TxPacketConfig TxConfig;
 
-/* -----------------------------------------------------------------------
+extern uint8_t tx_frame[60];
+
+/*----------------------------------------------------------------------
  * Slot table entry (packed — written directly to flash)
  * ----------------------------------------------------------------------- */
 typedef struct
@@ -73,10 +70,39 @@ typedef struct
 /* -----------------------------------------------------------------------
  * Public API
  * ----------------------------------------------------------------------- */
-void OTA_RESET(void);
-void eth_phy_init(void);
 
-/**
+/*
+ * @brief Triggerd once OTA Rquest is Authenticated, Starts the BOOTLOADER
+ */
+void OTA_RESET(void);
+
+/*
+ * @brief Initialises LAN8742 peripheral.
+ */
+void LAN8742_init(void);
+
+/*
+ * @brief Generates nonce and verifies recieved HASH
+ */
+void HASH_compute_verify(void);
+
+/*
+ * @brief prints HASH
+ * @param hash_buf is the pointer to the HASH buffer
+ * @param hash_name is the same to be printed: name:hash
+ */
+void HASH_print(uint8_t *hash_buf, char *hash_name);
+
+/*
+ * @brief transmit buffers via ethernet
+ * @param data is pointer to the buffer
+ * @param is the length of the buffer to be transmitted
+ * @retval HAL_OK on success
+ */
+HAL_StatusTypeDef eth_transmit_raw(uint8_t *data, uint16_t len);
+
+
+/*
  * @brief  Erase config sector and write cfg struct to ETX_CONFIG_FLASH_ADDR.
  * @retval HAL_OK on success
  */

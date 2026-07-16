@@ -17,6 +17,7 @@
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
+#include <ota_support.h>
 #include "main.h"
 #include "string.h"
 
@@ -24,7 +25,6 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
-#include "ota.h"
 #include "lan8742.h"
 
 /* USER CODE END Includes */
@@ -41,8 +41,6 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-#define UDP_PAYLOAD_OFFSET      42  // 14 (Eth) + 20 (IP) + 8 (UDP)
-#define HTTP_WAKE_UP "WASSUP_SEXXY"
 
 /* USER CODE END PM */
 
@@ -70,11 +68,11 @@ CRC_HandleTypeDef hcrc;
 
 ETH_HandleTypeDef heth;
 
+RNG_HandleTypeDef hrng;
+
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-extern  uint8_t  *assembled_buf;
-extern  uint16_t  assembled_len;
 
 /* USER CODE END PV */
 
@@ -85,6 +83,7 @@ static void MX_GPIO_Init(void);
 static void MX_ETH_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_CRC_Init(void);
+static void MX_RNG_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -129,11 +128,11 @@ int main(void)
   MX_ETH_Init();
   MX_USART3_UART_Init();
   MX_CRC_Init();
+  MX_RNG_Init();
   /* USER CODE BEGIN 2 */
 
-  eth_phy_init();
-  HAL_ETH_Start_IT(&heth) != HAL_OK?
-		  printf("HAL_ETH_Start_IT FAILED\r\n"):printf("HAL_ETH_Start_IT OK\r\n");
+  LAN8742_init();
+  HAL_ETH_Start_IT(&heth);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -142,12 +141,16 @@ int main(void)
   while (1)
   {
 	  HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_7);
+	  printf("Application running %ld\r\n",HAL_GetTick());
 	  HAL_Delay(1000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  if(ota_requested_flag)
-		  OTA_RESET();
+	  if(ota_requested_flag){
+		  HASH_compute_verify();
+	  }
+
+
   }
   /* USER CODE END 3 */
 }
@@ -177,7 +180,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLM = 8;
   RCC_OscInitStruct.PLL.PLLN = 216;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 2;
+  RCC_OscInitStruct.PLL.PLLQ = 9;
   RCC_OscInitStruct.PLL.PLLR = 2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -283,6 +286,32 @@ static void MX_ETH_Init(void)
   /* USER CODE BEGIN ETH_Init 2 */
 
   /* USER CODE END ETH_Init 2 */
+
+}
+
+/**
+  * @brief RNG Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_RNG_Init(void)
+{
+
+  /* USER CODE BEGIN RNG_Init 0 */
+
+  /* USER CODE END RNG_Init 0 */
+
+  /* USER CODE BEGIN RNG_Init 1 */
+
+  /* USER CODE END RNG_Init 1 */
+  hrng.Instance = RNG;
+  if (HAL_RNG_Init(&hrng) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN RNG_Init 2 */
+
+  /* USER CODE END RNG_Init 2 */
 
 }
 
